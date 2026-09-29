@@ -1,3 +1,5 @@
+import { parseParams } from '../scripts/move-parser.mjs';
+
 /**
  * MOV-012: Sender identity taken as an address parameter instead of ctx.
  *
@@ -68,7 +70,7 @@ const IDENTITY_NAMES = new Set([
   'sender', 'caller', 'user', 'owner', 'admin', 'signer', 'authority', 'operator', 'from',
 ]);
 
-// INSPECT F1: going per-word re-admitted #86's own excluded class through
+// F1: going per-word re-admitted #86's own excluded class through
 // a different word. #86 removed `recipient` on the principle that a
 // DESTINATION the caller may legitimately choose is not an assertion
 // about who the caller IS. The set still holds `owner`/`admin`, so once
@@ -160,13 +162,26 @@ export function check(source, filename) {
     }
     paramStr = paramStr.slice(1); // remove leading (
 
-    // parse each parameter. The type group captures a `::`-qualified path
-    // (sui::tx_context::TxContext) whole, then resolves to its LAST segment
-    // -- never a substring test, which would re-admit MyTxContextWrapper.
-    const params = paramStr.split(',').map(p => p.trim()).filter(Boolean)
-      .map(p => p.match(/(\w+)\s*:\s*(&mut\s+|&)?\s*([\w:]+)/))
-      .filter(Boolean)
-      .map(m => ({ name: m[1], type: m[3].split('::').pop() }));
+    // parse each parameter -- reusing scripts/move-parser.mjs's own
+    // `parseParams()` rather than a second, independent split.
+    // The naive `paramStr.split(',')` this replaced had no
+    // angle-bracket awareness, so a generic type's own internal comma
+    // (`o: &mut Table<u64, Bbbb...>`) cut the parameter list into TWO
+    // fragments -- `o: &mut Table<u64` and `Bbbb...>` -- and the second,
+    // colon-less fragment then hit `(\w+)` with no `:` to stop it,
+    // O(n^2) over a long second generic argument (measured: 101 / 584 /
+    // 1928 / 9276 ms at 10k / 20k / 40k / 80k chars; a single, non-generic
+    // argument of the same length reads 0 / 1 / 4 / 12 ms). `parseParams()`
+    // already tracks `<`/`>` depth correctly, so the generic's comma never
+    // splits the parameter in the first place -- the type is resolved to
+    // its LAST `::`-segment, stripped of any `<...>` first, so a
+    // qualified generic path (`sui::table::Table<u64, T>`) still lands on
+    // `Table`, never a substring test (which would re-admit
+    // `MyTxContextWrapper`).
+    const params = parseParams(paramStr).map(p => ({
+      name: p.name,
+      type: p.type.split('<')[0].trim().split('::').pop(),
+    }));
 
     // No TxContext, no finding: the rule's own prescribed fix,
     // tx_context::sender(ctx), needs one to call. A function with no

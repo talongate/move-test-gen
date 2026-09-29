@@ -299,7 +299,14 @@ function parseFunctionSignature(lines, startIdx, externalPrefix = '') {
   };
 }
 
-function parseParams(paramStr) {
+// Exported so a rule can split a parameter list without hand-rolling its
+// own comma split. A naive split has no angle-bracket awareness: a
+// generic's internal comma (`Table<u64, Bbbb>`) cuts it into two
+// fragments, and the second, colon-less fragment can hit an unanchored
+// `(\w+)` with nothing to stop it, O(n^2) over a long second-argument
+// name. This function tracks `<`/`>` depth correctly, so rules should
+// reuse it rather than keep a second implementation of the same job.
+export function parseParams(paramStr) {
   if (!paramStr.trim()) return [];
   const params = [];
   // split by comma, but respect angle brackets
@@ -332,7 +339,13 @@ function parseOneParam(s) {
   // prefixes both with `$`; keeping it here is what lets the body-level
   // extraction below match the SAME source text a macro body actually
   // uses, e.g. `$a * $b`, rather than a name the source never contains).
-  const m = s.match(/(\$?\w+)\s*:\s*(&mut\s+|&)?(.+)/);
+  //
+  // The name is anchored to the start of its word-run: a parameter with
+  // no `:` after a long word (`f(aaaa...aaaa, x: u64)`, which the parser
+  // is handed as text whether or not the compiler would accept it) made
+  // the unanchored `\w+` retry the whole run from every offset, O(n^2).
+  // Same anchor, same reasoning, as the operand regexes in parseBody.
+  const m = s.match(/(\$\w+|(?<!\w)\w+)\s*:\s*(&mut\s+|&)?(.+)/);
   if (!m) return null;
   // clean trailing parens/commas/whitespace from type
   const rawType = m[3].trim().replace(/[),;\s]+$/, '');
@@ -485,7 +498,29 @@ function parseBody(bodyLines, offset) {
     // `\w+` cannot match a `$`-led token at all, so a macro body
     // multiplying two of its own params was invisible here, not merely
     // mis-typed: MOV-002 had nothing in `multiplications` to iterate.
-    for (const mm of codeOnly.matchAll(/(\$?\w+)\s*\*\s*(\$?\w+)/g)) {
+    //
+    // The LEFT operand is anchored to the start of its word-run
+    // (`(?<!\w)`). Unanchored, `\w+` retried the whole run from every
+    // offset inside it, so one long identifier made this line O(n^2)
+    // (measured, node --cpu-prof: the dominant cost of a 40,000-character
+    // fixture). The anchor makes the regex try each run once -- linear --
+    // and, unlike a `\w{1,128}` bound, it never changes WHAT is captured:
+    // a bound has to give up somewhere, and the engine then either
+    // slides the match start rightward (capturing the run's trailing 128
+    // characters as the left operand) or refuses the line outright, and
+    // both change a verdict downstream. Here the left operand is always
+    // the whole run and the right operand (start pinned right after the
+    // operator) is always the whole run, so every consumer compares a
+    // name against a name spelled the same way, at any length: a
+    // `getVarType` lookup finds the declaration, a `_u128` suffix guard
+    // sees the suffix, MOV-003's guard set matches its divisor. No name
+    // is truncated, so no two distinct names can be made to collide.
+    //
+    // `\$\w+` is tried first and is deliberately NOT anchored: a `$` is
+    // never a word character, so `x$y * z` starts its operand at the `$`
+    // exactly as an unanchored `\$?\w+` would. Each `$` starts at most
+    // one scan of the run behind it, so that stays linear too.
+    for (const mm of codeOnly.matchAll(/(\$\w+|(?<!\w)\w+)\s*\*\s*(\$?\w+)/g)) {
       multiplications.push({
         line: lineNo,
         left: mm[1],
@@ -495,10 +530,12 @@ function parseBody(bodyLines, offset) {
       });
     }
 
-    // divisions -- same `\$?` tolerance, same reason, kept in sync with
-    // the multiplication regex directly above rather than left as a
-    // matching twin with the identical unfixed gap.
-    for (const dm of codeOnly.matchAll(/(\$?\w+)\s*\/\s*(\$?\w+)/g)) {
+    // divisions -- same `\$?` tolerance and the same run-start anchor on
+    // the left operand, for the same reasons, kept in sync with the
+    // multiplication regex directly above. (Unconsumed by any rule today --
+    // fixed anyway so the next rule that reads `divisions` does not
+    // inherit a truncated or slid name.)
+    for (const dm of codeOnly.matchAll(/(\$\w+|(?<!\w)\w+)\s*\/\s*(\$?\w+)/g)) {
       divisions.push({
         line: lineNo,
         numerator: dm[1],
@@ -506,8 +543,16 @@ function parseBody(bodyLines, offset) {
       });
     }
 
-    // function calls
-    const callMatch = trimmed.match(/(\w+(?:::\w+)*)\s*(?:<[^>]*>)?\s*\(/);
+    // function calls -- same bound on both `\w+` runs in the identifier
+    // path (`name` and each `::segment`); this was the LARGEST single
+    // cost measured, 6166ms of the same 8958ms run. Unlike the two
+    // operand regexes above this one keeps the `{1,128}` bound: `calls`
+    // is read for DISPLAY only (no rule compares a call name by equality
+    // or suffix, and none decides a verdict from it), so a name cut to
+    // its trailing 128 characters costs nothing more than a shorter
+    // label. If a rule ever starts comparing `calls[].fn`, give this the
+    // run-start anchor the operands use instead of relying on the bound.
+    const callMatch = trimmed.match(/(\w{1,128}(?:::\w{1,128})*)\s*(?:<[^>]*>)?\s*\(/);
     if (callMatch && !trimmed.match(/^(let|if|while|assert!|fun)\b/)) {
       calls.push({ line: lineNo, fn: callMatch[1] });
     }

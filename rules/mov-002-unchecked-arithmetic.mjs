@@ -33,6 +33,14 @@ const TITLE = 'integer multiplication may overflow without u128 promotion';
 export function check(source, filename) {
   const findings = [];
   const mod = parseModule(source);
+  // Split ONCE, shared by both part (a) below and part (b) further down.
+  // Previously this was recomputed on EVERY multiplication match (inside
+  // the loop below) as well as a second time before part (b) -- pure
+  // waste, since `source` never changes within one check() call and
+  // `.split('\n')` is a deterministic function of it. Trivial and
+  // provably behaviour-neutral: same input, same output, computed once
+  // instead of once-per-match-plus-once-more.
+  const lines = source.split('\n');
 
   for (const fn of mod.functions) {
     // skip test functions
@@ -54,8 +62,8 @@ export function check(source, filename) {
       if (/_u256$/.test(mul.left) || /_u256$/.test(mul.right)) continue;
       if (/_u128$/.test(mul.left) || /_u128$/.test(mul.right)) continue;
 
-      // get the source line for additional context checks
-      const lines = source.split('\n');
+      // get the source line for additional context checks (shared `lines`,
+      // split once at the top of check() -- see the comment there)
       const lineText = (lines[mul.line - 1] || '').trim();
 
       // skip if the line has an inline cast (as u128/u256)
@@ -95,7 +103,8 @@ export function check(source, filename) {
   // identifier always separates two nested opens, e.g. `A<B<C>>`), so a
   // literal `<<` is unambiguously a real left-shift operator and needs no
   // "is this actually a shift" guard.
-  const lines = source.split('\n');
+  // (`lines` is the same shared split from the top of check() -- see the
+  // comment there; no longer recomputed here.)
   let inTestBlock = false;
   let inTestOnlyModule = false;
 

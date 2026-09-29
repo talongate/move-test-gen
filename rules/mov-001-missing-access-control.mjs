@@ -100,8 +100,35 @@ function checkFunction(name, params, lineNo, filename, findings, isTestOnly) {
   const hasMut = /&mut\s+(?!TxContext)(?!tx_context)/.test(params);
   if (!hasMut) return;
 
-  // does it have a capability or key parameter?
-  const hasCap = /[A-Z]\w*Cap\b|\bCap\b|[A-Z]\w*Key\b|\bKey\b/.test(params);
+  // does it have a capability or key parameter? The rule is: some word in
+  // the parameter list ends in `Cap` (or `Key`) and either IS that bare
+  // word or has an uppercase letter before it -- `AdminCap`, `TreasuryCap`,
+  // `Cap`; not `xCap`, not `Capx`.
+  //
+  // This is not written as a regex (`[A-Z]\w*Cap\b`) because that is
+  // O(n^2): against a long ALTERNATING-CASE identifier (`AaAaAa...`),
+  // `[A-Z]` matches at every other offset and each match rescans the rest
+  // of the run for a `Cap` that is not there (an all-lowercase run does not
+  // trigger it; only case alternation multiplies the start positions).
+  // Capping the `\w*` (say `{0,127}`) removes the blow-up but changes the
+  // answer, because this is a BOOLEAN: once more than 127 characters sit
+  // between the uppercase and the `Cap`, no start position can reach it,
+  // and a function that HAS its capability gate reads as missing one. A
+  // bound on a boolean has to give up one of the two answers, so none is
+  // used here.
+  //
+  // Instead: a plain literal test first (linear, and false for almost every
+  // real parameter list), then the rule above evaluated per word-run.
+  // `/\w+/g` visits each run once, and `endsWith` plus a single uppercase
+  // scan of the same run are linear in it, so the whole test is linear in
+  // the parameter string and gives the regex's answer at any length.
+  const hasCap = /Cap\b|Key\b/.test(params) &&
+    (params.match(/\w+/g) || []).some(word => {
+      for (const suffix of ['Cap', 'Key']) {
+        if (word.endsWith(suffix) && (word.length === suffix.length || /[A-Z]/.test(word.slice(0, -suffix.length)))) return true;
+      }
+      return false;
+    });
   if (hasCap) return;
 
   // does it have a witness parameter that implies auth? A `key`/`_key`
