@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: talongate/move-test-gen@3afcb1a731e058835c622475b6203b42a4b52d84 # v1.6.0
+      - uses: talongate/move-test-gen@f2efe3338348e5bd2238a752bdf00b1c3800dfd8 # v1.6.1
         with:
           sources: sources
           tests: tests

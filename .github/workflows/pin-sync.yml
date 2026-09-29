@@ -1,0 +1,90 @@
+name: pin-sync
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: pin-sync-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  pin-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # check-pins.mjs resolves the release tag with `git rev-parse`
+          # -- a shallow checkout has no tags to resolve, so it would
+          # fail the tag-resolution precondition for the wrong reason.
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+      - name: check-pins passes, and sees every example workflow
+        shell: bash
+        run: |
+          # `shell: bash` runs with -e, so without the guard a nonzero
+          # exit aborts on the next line and the checker's own message
+          # (the exit 2 / exit 3 diagnostics) never reaches the job log.
+          set +e
+          node scripts/check-pins.mjs > /tmp/pin-check-out.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/pin-check-out.txt
+          if [ "$rc" -ne 0 ]; then
+            echo "FAIL: check-pins should exit 0 on a correctly-pinned tree (got $rc)"
+            exit 1
+          fi
+          # A regression that NARROWS the scan (fewer references found
+          # than exist) would still exit 0 above, and the single-file
+          # corruption step below only proves ONE reference is still
+          # seen -- neither catches partial blindness. The files checked
+          # are DERIVED, never a hard-coded count: every example workflow
+          # whose `uses:` line points at this action must be named in the
+          # output. The address is built from two halves for the same
+          # reason check-pins.mjs builds it that way.
+          # Cost: an example that lost its `uses:` line for this action
+          # entirely is no longer caught here. That is a broken example,
+          # a different defect, and never this checker's job.
+          owner=talongate
+          repo=move-test-gen
+          missing=0
+          for f in $(grep -lE "^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*$owner/$repo(/[^[:space:]@]*)?@" examples/workflows/*.yml); do
+            grep -qF "$f" /tmp/pin-check-out.txt || { echo "FAIL: $f is not named in check-pins output -- the scan may have narrowed"; missing=1; }
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+          echo "check-pins saw every example workflow that references the action"
+      - name: check-pins must FAIL on a corrupted pin
+        shell: bash
+        run: |
+          # Derives the SHA to corrupt from the file itself rather than a
+          # SHA hard-coded here -- a hard-coded value goes stale on the
+          # very next release and this step would then corrupt nothing,
+          # still fail loud on the exit-code check below, but for the
+          # wrong reason (the sed pattern never matched, not "the checker
+          # caught a mismatch"). Built from two string halves for the
+          # same reason check-pins.mjs itself is: written as one literal
+          # address, this step's own tracked text would be a fourth
+          # reference in the PASSING run above.
+          node -e "
+            const fs = require('fs');
+            const f = 'examples/workflows/pr-gate.yml';
+            const owner = 'talongate', repo = 'move-test-gen';
+            const re = new RegExp(owner + '/' + repo + '@([0-9a-f]{40})');
+            const text = fs.readFileSync(f, 'utf8');
+            const m = text.match(re);
+            if (!m) throw new Error('no pinned SHA found to corrupt in ' + f);
+            fs.writeFileSync(f, text.replace(m[1], 'f'.repeat(40)));
+          "
+          set +e
+          node scripts/check-pins.mjs > /tmp/pin-check-out.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/pin-check-out.txt
+          if [ "$rc" -eq 0 ]; then
+            echo "FAIL: a corrupted pin should make check-pins.mjs exit nonzero"
+            exit 1
+          fi
+          grep -q "MISMATCH" /tmp/pin-check-out.txt || { echo "FAIL: check-pins did not report the corruption"; exit 1; }
+          echo "check-pins exited $rc on a corrupted pin, as expected"
+          git checkout -- examples/workflows/pr-gate.yml
