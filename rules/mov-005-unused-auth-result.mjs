@@ -25,9 +25,18 @@ const TITLE = 'authorization check result discarded';
 // calling them without binding the result is correct because there is no result.
 const AUTH_PATTERNS = [
   /vector::contains\s*\(/,
-  /\w+::contains\s*\(/,
+  // `<word>::contains(` needs only ONE word character before the `::` --
+  // that is all the old `\w+::contains` could ever be asked. Written with
+  // `\w+` it was O(n^2) on a long identifier (unanchored, retried from
+  // every offset inside the run; ~100% of a 6667ms run on a 40,000-char
+  // identifier, evaluated twice per line). A single `\w` is the same
+  // boolean at any length and has no quantifier to retry. (A `{1,128}`
+  // bound also kept the truthiness here, because sliding preserves it;
+  // this is simply the form with nothing to bound.)
+  /\w::contains\s*\(/,
   /\bcontains\s*\(/,
-  /\w+::has\s*\(/,
+  // same one-character form, same reason, directly above.
+  /\w::has\s*\(/,
   /\bhas\s*\(/,
   /\bis_authorized\s*\(/,
   /\bis_admin\s*\(/,
@@ -143,7 +152,17 @@ export function check(source, filename) {
     if (/if\s*\(\s*$/.test(prevLine)) continue;
 
     if (fullStmt.endsWith(';') || fullStmt.endsWith(');')) {
-      const callMatch = trimmed.match(/(\w+(?:::\w+)?)\s*\(/);
+      // The discarded call's NAME, for the message only. Unanchored `\w+`
+      // was O(n^2) here too: legal receiver syntax puts a long identifier
+      // BEFORE the call (`<40,000-char ident>.has(x);`), so the leading
+      // `\w+` ran O(n) from every start offset (measured 123 / 473 / 1777
+      // ms at 10k / 20k / 40k chars, x4 per doubling). Anchoring the start
+      // to a word-run boundary (`(?<!\w)`) tries each run once, and it
+      // captures the same whole name the unbounded form did -- so the
+      // message names a >128-character module in full instead of a
+      // trailing slice of it. The finding itself never depends on this
+      // lookup.
+      const callMatch = trimmed.match(/((?<!\w)\w+(?:::\w+)?)\s*\(/);
       const fnName = callMatch ? callMatch[1] : 'call';
 
       findings.push({

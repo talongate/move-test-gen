@@ -97,8 +97,22 @@ function analyzeFn(fnLines, filename, findings) {
 
   for (const { text, lineNo } of fnLines) {
     if (!text.startsWith('//')) {
-      // match: expr / variable (not literal)
-      const divMatches = [...text.matchAll(/(\w+)\s*\/\s*(\w+)/g)];
+      // match: expr / variable (not literal). The LEFT operand is anchored
+      // to the start of its word-run (`(?<!\w)`): unanchored, `\w+` retried
+      // the whole run from every offset inside it, so one long IDENTIFIER
+      // (legal Move -- unlike a long numeric literal, which sui rejects)
+      // made this line O(n^2) (node --cpu-prof; the identical shape lives in
+      // scripts/move-parser.mjs, this file carries its own independent copy).
+      // The anchor makes the regex try each run once -- linear -- WITHOUT
+      // changing what is captured. A `\w{1,128}` bound could not promise
+      // that: past 128 characters the engine either slides the match to a
+      // trailing slice or refuses the line, and either way the denominator
+      // stops being spelled the way `checkedVars` spells it, so a guarded
+      // division is reported (noise) or an unguarded one is dropped (a
+      // silent miss). Denominator and guard are both the whole run, at any
+      // length, so they compare equal exactly when they are the same name.
+      // The denominator starts right after the operator, which pins it.
+      const divMatches = [...text.matchAll(/((?<!\w)\w+)\s*\/\s*(\w+)/g)];
       for (const m of divMatches) {
         const denom = m[2];
 
@@ -131,17 +145,22 @@ function analyzeFn(fnLines, filename, findings) {
       // "not a comment line" check as the division scan -- a commented-out
       // `assert!` must not register as a real check either.
 
-      // assert!(x != 0, ...) or assert!(x > 0, ...)
+      // assert!(x != 0, ...) or assert!(x > 0, ...). Each guard below is
+      // pinned at its start by a mandatory literal (`assert!(`, `if (`), so
+      // an unbounded `\w+` is linear here and captures the whole name --
+      // the same spelling the division regex above produces for a
+      // denominator, which is what makes the `checkedVars` equality test a
+      // like-for-like comparison at any length.
       const checkMatch = text.match(/assert!\s*\(\s*(\w+)\s*(!= 0|> 0)/);
       if (checkMatch) checkedVars.add(checkMatch[1]);
 
-      // x != 0 / x > 0 in an if condition
+      // x != 0 / x > 0 in an if condition. Same reasoning.
       const ifCheck = text.match(/if\s*\(\s*(\w+)\s*(!= 0|> 0)/);
       if (ifCheck) checkedVars.add(ifCheck[1]);
 
       // x == 0 only counts as a guard if this same line also aborts --
       // `if (x == 0) {}` (or any non-aborting body) checks nothing and must
-      // not silence a real division below it.
+      // not silence a real division below it. Same reasoning.
       const zeroGuard = text.match(/if\s*\(\s*(\w+)\s*== 0\s*\).*\b(abort|assert!\s*\(\s*false)\b/);
       if (zeroGuard) checkedVars.add(zeroGuard[1]);
     }
