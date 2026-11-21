@@ -21,7 +21,7 @@ inputs:
     required: false
     default: ''
   lint:
-    description: 'Run security pattern detection (9 rules: MOV-001–MOV-006, MOV-008, MOV-011, MOV-012)'
+    description: 'Run security pattern detection (every rule in rules/)'
     required: false
     default: 'false'
   disable:

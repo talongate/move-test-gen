@@ -5,7 +5,7 @@ description: >
   coverage summary shows gaps, when a PR touches arithmetic or access control.
   WHAT: generates edge-case and adversarial Move test suites — boundary values,
   overflow/underflow, access-control violations, state-machine ordering.
-  Also runs security lint (9 rules, 10 checks: MOV-001 missing capability, MOV-002
+  Also runs security lint (every rule in rules/, e.g. MOV-001 missing capability, MOV-002
   unchecked mul + bit-shift, MOV-003 div-by-zero, MOV-004 unsafe downcast, MOV-005
   discarded auth check, MOV-006 shared abort code, MOV-008 exact-equality payment
   assert, MOV-011 public(package) entry PTB bypass, MOV-012 spoofable sender

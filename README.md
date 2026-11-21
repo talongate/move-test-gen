@@ -58,7 +58,7 @@ skills/
     │   ├── testability.mjs
     │   └── walk-dir.mjs
     ├── rules/
-    │   └── mov-*.mjs            (all nine, needed for --lint)
+    │   └── mov-*.mjs            (every rule file, needed for --lint)
     └── references/
         └── patterns.md
 ```
